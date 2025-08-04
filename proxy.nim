@@ -1,0 +1,55 @@
+import std/[os, asyncdispatch]
+import libs/[mitm, certman ]
+import re
+
+# inspiration taken from: https://xmonader.github.io/nimdays/day15_tcprouter.html
+# by inspiration I mean it saved me hours of trial and error since i'm dumb.
+
+# This project is to learn the concepts involved in HTTP/HTTPS proxying, Websockets proxying and SOCKS. 
+
+# to MITM, i have to place myself as the remote client, when im tunnelling.
+# meaning:
+# 1 - I wrap the socket intented for the remote server with my ssl context
+# 2 - I start another socket and i negotiate ssl to the actual target
+# 3 - I tunnel the two and I can read the data in the tunnel.
+# NOTE: For this to work I also have to generate certs on the fly, implemented poorly for now.
+
+# TODO: Fix Edgecases:
+    # FIXME: fix edgecase in www.jumpstart.com, site doesn't load for some reason.
+    # FIXME: Investigate weird crash on youtube when browsing videos, only on macos apparently.
+# TODO: See if data is encoded before writing the interaction, if it is, unencode it. EX gzip.
+# TODO: See if it would be possible to inject HTML/scripts in like ZAP does.
+# TODO: Fix websockets, they seem to break. Read on SWITCH PROTOCOL and how it's done.
+# TODO: Tests for various proxy related attacks/dos on my implementation, it will probably be bad
+
+# proc setupLogging*() = 
+#     var stdout = newConsoleLogger(
+#         fmtStr = "[$time][$levelname][NemesisMITM]::",
+#         levelThreshold = lvlWarn)
+#         # levelThreshold = lvlInfo
+
+#     var fileLog = newFileLogger("errors.log", levelThreshold=lvlError)
+#     addHandler(stdout)
+#     addHandler(fileLog)
+
+proc run(host: string = "0.0.0.0", port: int = 8081) =
+    #setupLogging()
+    #log(lvlInfo, fmt"[*] STARTING on {host}:{$port} --")
+    if not dirExists("certs"):
+        echo ("[?] Root CA not found, generating :: certs/ca.pem")
+        echo ("[?] Do not forget to import/use this CA !")
+        if not createCA():
+            echo ("[!] Error while creating CA.")
+            quit(QuitFailure)
+    try:
+        waitFor startMITMProxy(host, port)
+    except:
+        echo ("[start][ERROR]" & getCurrentExceptionMsg())
+
+when isMainModule:
+ #dispatch run, help={
+ #    "host": "Specify the interface to listen on.",
+ #    "port": "Specify the port to listen on."}
+
+    run()
+ 
