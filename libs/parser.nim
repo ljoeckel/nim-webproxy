@@ -100,9 +100,9 @@ proc parseRequest*(request: string, cid: string): seq[tuple[headers: string, bod
     return requests
 
 
-proc removeEncoding*(req: string): string =
+#proc removeEncoding*(req: string): string =
     ## This completely removes any Transfer-Encoding headers from the given request
-    return req.replace(re"Transfer-Encoding: .*\r\n", "")
+#    return req.replace(re"Transfer-Encoding: .*\r\n", "")
 
 
 proc decode() =
@@ -272,13 +272,9 @@ proc getBody*(header: Header, request: string): string =
         echo "ERROR: no content-length"
         return
 
-    var index: int
-    while index < len(request) and index != -1:
-        var body = "\r\n\r\n"
-        let start_index = index
-        index = request.find("\r\n\r\n", start=start_index)
-        if index != -1:
-            index += 4
-            body = request[index .. index + header.content_length - 1]
-            return body
-    return ""
+    var index = request.find("\r\n\r\n", start=0)
+    if index != -1:
+        index += 4
+        return request[index .. ^1]
+    else:
+        return ""
