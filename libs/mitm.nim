@@ -10,7 +10,7 @@ import statcounter
 const 
     BUFF_SIZE = 2048
     BLOCK_ADS = false
-    SAVE_INTERACTION = true
+    SAVE_INTERACTION = false
     BAD_REQUEST = "HTTP/1.1 400 BAD REQUEST\r\nConnection: close\r\n\r\n"
     OK = "HTTP/1.1 200 OK\r\n\r\n"
     NOT_IMPLEMENTED = "HTTP/1.1 501 NOT IMPLEMENTED\r\nConnection: close\r\n\r\n"
@@ -176,7 +176,7 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string) {.asyn
     except:
         incrementCounter("TUNNEL_ERR")
         echo "Error tunnel cid=", cid
-    
+
 
 proc processClient(client: AsyncSocket, cid: string) {.async.} =
     let keyD = cid & ":D"
@@ -227,20 +227,11 @@ proc processClient(client: AsyncSocket, cid: string) {.async.} =
     else:
         await mitmHttps(client, host, port, cid)
 
-        let src = BUFFER_MAP.getOrDefault(keyS, "")
-        let src_header = getHeader(cid, src)
-
-        let dst = BUFFER_MAP.getOrDefault(keyD, "")
-        let header = getHeader(cid, dst)
-        if header.hasContent():
-            let body = getBody(header, dst)
-            echo "DST cid:", header.cid, " type:", header.content_type," encoding:", header.content_encoding, " len:", header.content_length, " status_code:", header.response_status_code, " body.len:", len(body)
-            #if header.content_encoding.isEmptyOrWhitespace:
-            #    echo body[0..min(80,len(body)-1)]
-
-    #if SAVE_INTERACTION:
-    #    if not saveInteraction(host, port, cid, parseRequest(interaction, cid)):
-    #        echo "ERR while writing interaction to filesystem."
+        if SAVE_INTERACTION:
+            let src = BUFFER_MAP.getOrDefault(keyS, "")
+            let dst = BUFFER_MAP.getOrDefault(keyD, "")
+            if not saveInteraction(host, port, cid, src, dst):
+                echo "ERR while writing interaction to filesystem."
 
 
 # ------ procs for watchout --------
@@ -281,7 +272,7 @@ proc startMITMProxy*(address: string, port: int) {.async.} =
             incrementCounter("SERVER_ACCEPT")
             asyncCheck processClient(client, oid)
 
-            #discard listCounters()
+            discard listCounters()
     except:
        echo "[start] " & getCurrentExceptionMsg()
        echo getStackTrace()

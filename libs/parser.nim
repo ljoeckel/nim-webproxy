@@ -1,4 +1,5 @@
 import std/[uri, re, tables, strutils]
+import zippy
 
 let HEADER_REGEX = re"^([A-Za-z0-9-]*):(.*)$"
 let REQUESTLINE_REGEX = re"([A-Z]{1,511}) ([^ \n\t]*) HTTP\/[0-9]\.[0-9]"
@@ -255,7 +256,7 @@ proc getHeader*(cid: string, s: string): Header =
     header.user_agent = headers.getOrDefault("User-Agent","")
     header.vary = headers.getOrDefault("Vary","")
 
-    return header
+    return header   
 
 proc isSupportedContent(header: Header): bool =
     let ct = normalize(header.content_type)
@@ -267,14 +268,25 @@ proc hasContent*(header: Header): bool =
     if header.content_length > 0 and isSupportedContent(header):
         result = true
 
-proc getBody*(header: Header, request: string): string =
-    if not header.content_length > 0:
-        echo "ERROR: no content-length"
-        return
+proc getBody*(cid: string, request: string): (Header, string) =
+    let header = getHeader(cid, request)
+    if header.content_length == 0:
+        return (header, "")
+
+    var body: string = ""
 
     var index = request.find("\r\n\r\n", start=0)
     if index != -1:
-        index += 4
-        return request[index .. ^1]
+        body = request[index+4 .. ^1]
+
+        if header.content_encoding == "gzip":
+            try:
+                let body_unzip = uncompress(body)
+                body = body_unzip
+                echo "DST cid:", header.cid, " type:", header.content_type," encoding:", header.content_encoding, " len:", header.content_length, " status_code:", header.response_status_code, " body.len:", len(body)
+            except:
+                echo "[uncompress] ", getCurrentExceptionMsg()
     else:
-        return ""
+        body = "<NO BODY>"
+
+    return (header, body)
