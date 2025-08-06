@@ -1,3 +1,6 @@
+# THIS IS A PURE LEARNING PROJECT
+# BASED ON THE WORK https://github.com/Ramoreik/nim-mitm-proxy
+
 # Compile
 ## Valgrind
 nim c --debugger:native  -d:useMalloc t.nim  && valgrind --leak-check=full ./t
