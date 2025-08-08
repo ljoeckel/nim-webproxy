@@ -1,23 +1,20 @@
-import std/[algorithm, sequtils, asyncnet, asyncdispatch, nativesockets,
-            strutils,
-            net, tables, sets, oids,  math, streams]
-import system
-import parser, reader, certman, utils
+import std/[algorithm, envvars, sequtils, asyncnet, asyncdispatch, nativesockets,
+            strutils, net, tables, sets, oids, math, streams]
+import system, parser, reader, certman, utils
 import easylist
 #import watchout
 import statcounter
+import decode
+import config
 
 const 
-    BUFF_SIZE = 2048
-    BLOCK_ADS = false
-    SAVE_INTERACTION = false
     BAD_REQUEST = "HTTP/1.1 400 BAD REQUEST\r\nConnection: close\r\n\r\n"
     OK = "HTTP/1.1 200 OK\r\n\r\n"
     NOT_IMPLEMENTED = "HTTP/1.1 501 NOT IMPLEMENTED\r\nConnection: close\r\n\r\n"
     NOT_FOUND = "HTTP/1.1 404 NOT FOUND\r\nConnection: close\r\n\r\n"
-      
+
 var
-    BUFFER_MAP = initTable[string, string]()
+    CONFIG: Configuration
     SOCKET_MAP = initTable[string, AsyncSocket]()
     REMOTE_SOCKET_MAP = initTable[string, AsyncSocket]()
     BLOCKED_DOMAINS: HashSet[string]
@@ -50,32 +47,23 @@ proc sendRawRequest(target: AsyncSocket, req: string): Future[tuple[headers: str
         result = await target.readHTTPRequest()
 
 
-proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string) {.async.} =    
-    let keyS = cid & ":S"
-    let keyD = cid & ":D"
-
+proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string): Future[string] {.async.} =    
+    var buf = newStringStream()
+    
     defer: 
-        removeSocket(cid)
-        setCounter("BUFFER_MAP.len", len(BUFFER_MAP))    
+        buf.close()
+        incrementCounter("TUNNEL", len(result), StatType.bytes )
 
     proc srcHasData(): Future[string] {.async.}  =
-        var buf = newStringStream()
-
-        defer:
-            buf.setPosition(0)
-            BUFFER_MAP[keyS] = buf.readAll()
-            buf.close()
-            incrementCounter("SRC.future.complete")
-
         try:
             while not src.isClosed and not dst.isClosed:
-                let data = src.recv(BUFF_SIZE)
-                let future = await withTimeout(data, 1000)
+                let data = src.recv(CONFIG.buffer_size)
+                let future = await withTimeout(data, 2000)
                 if future and not dst.isClosed and data.read.len() != 0:
                     let s = data.read()
                     #await dst.send(removeEncoding(s))
                     await dst.send(s)
-                    if SAVE_INTERACTION: buf.write(s)
+                    buf.write(s)
                     incrementCounter("TUNNEL_SRC", len(s), StatType.bytes )
                 else:
                     break
@@ -85,22 +73,14 @@ proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string) {.async.} =
 
 
     proc dstHasData(): Future[string] {.async.} =
-        var buf = newStringStream("")
-
-        defer:
-            buf.setPosition(0)
-            BUFFER_MAP[keyD] = buf.readAll()
-            buf.close()
-            incrementCounter("DST.future.complete")
-
         try:
             while not dst.isClosed and not src.isClosed:
-                let data = dst.recv(BUFF_SIZE)
-                let future = await withTimeout(data, 1000)
+                let data = dst.recv(CONFIG.buffer_size)
+                let future = await withTimeout(data, 2000)
                 if future and not src.isClosed and data.read.len() != 0:
                     let s = data.read()
                     await src.send(s)
-                    if SAVE_INTERACTION: buf.write(s)
+                    buf.write(s)
                     incrementCounter("TUNNEL_DST", len(s), StatType.bytes )
                 else:
                     break
@@ -109,9 +89,11 @@ proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string) {.async.} =
             echo "ERR! dstHasData", getCurrentExceptionMsg()
 
     await srcHasData() and dstHasData()
+    buf.setPosition(0)
+    result = buf.readAll()
 
 
-proc mitmHttp(client: AsyncSocket, host: string, port: int, req: string, cid: string) {.async.} = 
+proc mitmHttp(client: AsyncSocket, host: string, port: int, req: string, cid: string): Future[string] {.async.} = 
     let remote = newAsyncSocket(buffered=false)
     REMOTE_SOCKET_MAP[cid] = remote
 
@@ -121,17 +103,17 @@ proc mitmHttp(client: AsyncSocket, host: string, port: int, req: string, cid: st
 
     try:
         await remote.connect(host, Port(port))
-        #var res_info = await remote.sendRawRequest(removeEncoding(req))
-        var res_info = await remote.sendRawRequest(req)
+        var res_info = await remote.sendRawRequest(removeEncoding(req))
+        #var res_info = await remote.sendRawRequest(req)
         await client.send(res_info.headers & res_info.body)
-        echo "TODO: mitmHttp ", (req & "\r\n", res_info.headers & res_info.body)
+        return req & "\r\n" & res_info.headers & res_info.body
     except:
         incrementCounter("HTTP_RESOLVE_HOST")
         echo "http Could not resolve remote host " & host
         await client.send(NOT_FOUND)
 
 
-proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string) {.async.} =
+proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string): Future[string] {.async.} =
     defer:
         removeSocket(cid)
         incrementCounter("HTTPS")
@@ -172,22 +154,15 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string) {.asyn
     wrapConnectedSocket(ctx, client, handshakeAsServer, hostname = host)
 
     try:
-        await tunnel(client, remote, cid)
+        result = await tunnel(client, remote, cid)
     except:
         incrementCounter("TUNNEL_ERR")
         echo "Error tunnel cid=", cid
 
 
 proc processClient(client: AsyncSocket, cid: string) {.async.} =
-    let keyD = cid & ":D"
-    let keyS = cid & ":S"
-    
     defer:
-        if BUFFER_MAP.hasKey(keyS):
-            BUFFER_MAP.del(keyS)
-        if BUFFER_MAP.hasKey(keyD):
-            BUFFER_MAP.del(keyD)
-        incrementCounter("REQUESTS")
+        removeSocket(cid)
 
     let req = await readHTTPRequest(client)
     var headers = parseHeaders(req.headers)
@@ -205,7 +180,7 @@ proc processClient(client: AsyncSocket, cid: string) {.async.} =
         await client.send(BAD_REQUEST)
         return
 
-    if BLOCK_ADS:
+    if CONFIG.block_ads:
         # Lookup full hostname in BLOCKED_DOMAIN
         if BLOCKED_DOMAINS.contains(host): 
             incrementCounter("BLOCKED_DOMAINS")
@@ -219,19 +194,17 @@ proc processClient(client: AsyncSocket, cid: string) {.async.} =
             await client.send(BAD_REQUEST)
             return
     
+    var interaction: string
     if requestline[0] != "CONNECT" and proto == "http":
         requestline[1] = route
         headers["requestline"] = join(requestline, " ") 
         var req = proxyHeaders(headers) & req.body
-        await mitmHttp(client, host, port, req, cid)
+        interaction = await mitmHttp(client, host, port, req, cid)
     else:
-        await mitmHttps(client, host, port, cid)
+        interaction = await mitmHttps(client, host, port, cid)
 
-        if SAVE_INTERACTION:
-            let src = BUFFER_MAP.getOrDefault(keyS, "")
-            let dst = BUFFER_MAP.getOrDefault(keyD, "")
-            if not saveInteraction(host, port, cid, src, dst):
-                echo "ERR while writing interaction to filesystem."
+    if CONFIG.save_interaction:
+        processRequest(CONFIG, interaction, cid, host, port)
 
 
 # ------ procs for watchout --------
@@ -247,17 +220,22 @@ proc processClient(client: AsyncSocket, cid: string) {.async.} =
 #    discard
 # ----------------------------------
 
-proc startMITMProxy*(address: string, port: int) {.async.} = 
+proc startMITMProxy*(cfg: Configuration, address: string, port: int) {.async.} = 
+    CONFIG = cfg # update global CONFIG var
     ## Wrapper proc to start the MITMProxy.
     ## Will listen and process clients until stopped on the provided address:port.
 
     # Read Easylist domains
-    BLOCKED_DOMAINS = getBlockedDomains()
-    # Check for changes on file
-    #newWatchout("customlist.txt", onChange, onFound, onDelete).start()
+    if CONFIG.block_ads:
+        BLOCKED_DOMAINS = getBlockedDomains()
+        # Check for changes on file
+        #newWatchout("customlist.txt", onChange, onFound, onDelete).start()
 
     # start server
     let server = newAsyncSocket(buffered=false)
+    defer:
+        server.close()
+
     server.setSockOpt(OptReuseAddr, true) 
     server.bindAddr(Port(port), address)
 
@@ -272,9 +250,8 @@ proc startMITMProxy*(address: string, port: int) {.async.} =
             incrementCounter("SERVER_ACCEPT")
             asyncCheck processClient(client, oid)
 
-            discard listCounters()
+            if CONFIG.list_statistics:
+                discard listCounters()
     except:
        echo "[start] " & getCurrentExceptionMsg()
        echo getStackTrace()
-    finally:
-        server.close()

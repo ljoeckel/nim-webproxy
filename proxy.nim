@@ -1,6 +1,7 @@
-import std/[os, asyncdispatch]
+import std/[os, strutils, asyncdispatch]
 import libs/[mitm, certman ]
 import re
+import libs/config
 
 # inspiration taken from: https://xmonader.github.io/nimdays/day15_tcprouter.html
 # by inspiration I mean it saved me hours of trial and error since i'm dumb.
@@ -32,7 +33,10 @@ import re
 #     addHandler(stdout)
 #     addHandler(fileLog)
 
-proc run(host: string = "0.0.0.0", port: int = 8081) =
+
+proc run() =
+    let config = getConfig()
+
     #setupLogging()
     #log(lvlInfo, fmt"[*] STARTING on {host}:{$port} --")
     if not dirExists("certs"):
@@ -42,14 +46,10 @@ proc run(host: string = "0.0.0.0", port: int = 8081) =
             echo ("[!] Error while creating CA.")
             quit(QuitFailure)
     try:
-        waitFor startMITMProxy(host, port)
+        waitFor startMITMProxy(config, config.host, config.port)
     except:
         echo ("[start][ERROR]" & getCurrentExceptionMsg())
 
 when isMainModule:
- #dispatch run, help={
- #    "host": "Specify the interface to listen on.",
- #    "port": "Specify the port to listen on."}
-
     run()
  
