@@ -1,4 +1,4 @@
-import std/[nativesockets, strutils, net, httpclient, sets, uri]
+import std/[nativesockets, strformat, logging, strutils, net, httpclient, sets, uri]
 import system
 
 const EASYLIST = "easylist.txt"
@@ -19,7 +19,7 @@ proc getEasylist(filename: string): seq[string] =
                 easylist = client.getContent("https://easylist.to/easylist/" & EASYLIST)
                 writeFile(filename, easylist)
             except:
-                echo "Could not get ", filename, ", Exception: ", getCurrentExceptionMsg()
+                log(lvlError, fmt"[getEasyList] Could not open {filename}. Exception:{getCurrentExceptionMsg()}")
 
     return splitLines(easylist)
 

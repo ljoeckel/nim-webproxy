@@ -1,5 +1,4 @@
-import std/[strformat, strutils, 
-            os, re, net]
+import std/[logging, strformat, strutils, os, re, net]
 import utils
 
 
@@ -11,7 +10,6 @@ let TEMPLATE_FILE = CONFIG_D & "/template.cnf"
 let VALID_HOST = re"^[^']{2,63}"
 
 # CERTMAN :: in charge of generation of certificates and handling of MITM SSL contexts. 
-
 
 proc getKeyFilename(host: string): string =
     joinPath(CERTS_D, host, host & ".key.pem")
@@ -37,14 +35,14 @@ proc createCA*(): bool =
 
     if not dirExists(CERTS_D): createDir(CERTS_D)
 
-    echo fmt"[*] Creating root key :: " & CA_KEY
+    log(lvlInfo, fmt"[createCA] Creating root key :: {CA_KEY}")
     if not execCmdWrap(openssl & fmt" genrsa -out '{CA_KEY}' 2048"):
         return false
 
     if not execCmdWrap(chmod & fmt" 400 '{CA_KEY}'"):
         return false
 
-    echo fmt"[*] Creating root CA :: {CA_FILE}"
+    log(lvlInfo, fmt"[createCA] Creating root CA :: {CA_FILE}")
     if not execCmdWrap(
             fmt"""
                 {openssl} req -new -x509 \
@@ -72,12 +70,12 @@ proc generateHostCertificate(host: string): bool =
     let srl_file = fmt"{server_d}/{host}.srl"
 
     if not match(host, VALID_HOST): 
-        echo "[!] Invalid host provided."
+        log(lvlError, fmt"[generateHostCertificate] Invalid host provided")
         return false
 
     if not dirExists(server_d): createDir(server_d)
 
-    echo "[*] Creating key for: " & host
+    log(lvlInfo, fmt"[generateHostCertificate] for {host}")
     if not execCmdWrap(openssl & fmt" genrsa -out '{key_file}'"): 
         return false
 
@@ -88,13 +86,13 @@ proc generateHostCertificate(host: string): bool =
             let config = tmpl.readAll().replace("{{domain}}", host) 
             host_cnf.write(config)
         except:
-            echo "[!] Error while templating the config file."
+            log(lvlError, fmt"[generateHostCertificate] for {host} Error while templating the config file.")
             return false
         finally:
             tmpl.close()
             host_cnf.close()
 
-    echo "[*] Creating csr for: " & host
+    log(lvlInfo, fmt"[generateHostCertificate] Creating csr for {host}")
     if not execCmdWrap(
             fmt"""
             {openssl} req -subj '/CN={host}' \
@@ -106,7 +104,7 @@ proc generateHostCertificate(host: string): bool =
             """):
         return false
 
-    echo "[*] Creating cert for: " & host 
+    log(lvlInfo, fmt"[generateHostCertificate] Creating cert for {host}")
     if not execCmdWrap(
             fmt"""
             openssl x509 -req -extensions v3_req \

@@ -1,4 +1,4 @@
-import std/[tables, re, osproc, strformat, os, times, strutils]
+import std/[tables, logging, strformat, os, times, strutils]
 import parser 
 import zippy
 import brotli
@@ -7,17 +7,6 @@ import config
 const RNRN = "\r\n\r\n"
 const IMAGES_D = "interactions"
 var IMAGE_COUNTER = 0
-
-proc getRequest(path: string): string =
-    try:
-        let f = open(path)
-        defer:
-            f.close()
-        result = f.readAll()
-    except:
-        echo getCurrentExceptionMsg()
-        echo getCurrentException().getStackTrace()
-
 
 proc saveImage(content_type: string, cid: string, host: string, port: int, data: string): bool =
     if data.isEmptyOrWhitespace:
@@ -41,9 +30,9 @@ proc saveImage(content_type: string, cid: string, host: string, port: int, data:
             f.close()
         f.write(data)
         inc(IMAGE_COUNTER)
-        echo data.len, " bytes written to ", fn
+        log(lvlInfo, fmt"[saveImage] {data.len} written to {fn}")
     except: 
-        echo "Could not data to ", joinPath(dirname, fmt"{cid}-{timestamp}")
+        log(lvlError, fmt"[saveImage] path:{fn} cid: {cid} Exception: {getCurrentExceptionMsg()}")
         return false
     
     return true
@@ -56,7 +45,7 @@ proc processRequest*(config: Configuration, request: var string, cid: string, ho
     var index: int
     while index < len(request) and index != -1:
         var headers: Table[string, string]
-        var header = ""
+        #var header = ""
         var body = RNRN
         let start_index = index
         index = request.find(RNRN, start=start_index)
@@ -66,7 +55,7 @@ proc processRequest*(config: Configuration, request: var string, cid: string, ho
             #let header = proxyHeaders(headers)
             let contentLength = parseInt(headers.getOrDefault("content-length","0"))
             if contentLength + index - 1 > request.len:
-                echo "ERR could not extract body. Invalid or Missing Body data: contentLength:", contentLength, " index+CL-1:", index+contentLength-1, " request.len:", request.len
+                log(lvlError, fmt"[processRequest] Could not extract body. Invalid | Missing Body data: contentLength:{contentLength} index+CL-1:{index+contentLength-1} request.len:{request.len}")
                 break
 
             if contentLength > 0:
@@ -76,12 +65,16 @@ proc processRequest*(config: Configuration, request: var string, cid: string, ho
                 var content_type = headers.getOrDefault("content-type", "")
                 if not content_type.isEmptyOrWhitespace:
                     let encoding = headers.getOrDefault("content-encoding", "")
-                    echo "content type:", content_type, " encoding:", encoding
                     if not encoding.isEmptyOrWhitespace:
                         if encoding == "br":  # brotli
-                            body = decompressBrotli(body)
+                            try: 
+                                body = decompressBrotli(body)
+                            except:
+                                log(lvlError, fmt"[processRequest] decompressBrotli exception:{getCurrentExceptionMsg()}")
                         else:
-                            try: body = uncompress(body)
-                            except: echo getCurrentExceptionMsg()
+                            try:
+                                body = uncompress(body)
+                            except:
+                                log(lvlError, fmt"[processRequest] zippy exception:{getCurrentExceptionMsg()}")
 
                     discard saveImage(content_type, cid, host, port, body)

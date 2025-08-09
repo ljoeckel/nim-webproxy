@@ -22,5 +22,4 @@ proc getConfig*(): Configuration  =
     config.save_interaction = parseBool(dict.getSectionValue("proxy","save-interaction", "true"))
     config.save_raw_request = parseBool(dict.getSectionValue("proxy","save-raw-request", "true"))
     config.list_statistics = parseBool(dict.getSectionValue("proxy","list-statistics", "true"))
-    echo repr(config)
     return config

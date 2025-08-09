@@ -1,8 +1,6 @@
-import std/[algorithm, envvars, sequtils, asyncnet, asyncdispatch, nativesockets,
-            strutils, net, tables, sets, oids, math, streams]
-import system, parser, reader, certman, utils
+import std/[logging, strformat, asyncnet, asyncdispatch, nativesockets, strutils, net, tables, sets, oids, math, streams]
+import system, parser, reader, certman
 import easylist
-#import watchout
 import statcounter
 import decode
 import config
@@ -10,7 +8,6 @@ import config
 const 
     BAD_REQUEST = "HTTP/1.1 400 BAD REQUEST\r\nConnection: close\r\n\r\n"
     OK = "HTTP/1.1 200 OK\r\n\r\n"
-    NOT_IMPLEMENTED = "HTTP/1.1 501 NOT IMPLEMENTED\r\nConnection: close\r\n\r\n"
     NOT_FOUND = "HTTP/1.1 404 NOT FOUND\r\nConnection: close\r\n\r\n"
 
 var
@@ -69,7 +66,7 @@ proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string): Future[string] {.a
                     break
         except:
             incrementCounter("SRC_HAS_DATA ERR")
-            echo "ERR! src.hasData ", getCurrentExceptionMsg()
+            log(lvlError, fmt"[srcHasData] Exception:{getCurrentExceptionMsg()}")
 
 
     proc dstHasData(): Future[string] {.async.} =
@@ -86,7 +83,7 @@ proc tunnel(src: AsyncSocket, dst: AsyncSocket, cid: string): Future[string] {.a
                     break
         except:
             incrementCounter("DST_HAS_DATA ERR")
-            echo "ERR! dstHasData", getCurrentExceptionMsg()
+            log(lvlError, fmt"[dstHasData] Exception:{getCurrentExceptionMsg()}")
 
     await srcHasData() and dstHasData()
     buf.setPosition(0)
@@ -109,7 +106,7 @@ proc mitmHttp(client: AsyncSocket, host: string, port: int, req: string, cid: st
         return req & "\r\n" & res_info.headers & res_info.body
     except:
         incrementCounter("HTTP_RESOLVE_HOST")
-        echo "http Could not resolve remote host " & host
+        log(lvlError, fmt"[mitmHttp] Could not resolve host {host}")
         await client.send(NOT_FOUND)
 
 
@@ -120,7 +117,7 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string): Futur
 
     if not handleHostCertificate(host):
         incrementCounter("HANDLE_HOST_CERTIFICATE")
-        echo "Error occured while generating certificate for {host}."
+        log(lvlError, fmt"[mitmHttps] Error occured while generating certificate for {host}.")
         await client.send(BAD_REQUEST)
         return
     
@@ -135,7 +132,7 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string): Futur
     try:
         await remote.connect(host, Port(port))
     except:
-        echo "https ERR Could not resolve remote host", $host
+        log(lvlError, fmt"[mitmHttps] Could not resolve remote host {host}.")
         incrementCounter("RESOLVE_HOST_ERR")
         await client.send(NOT_FOUND)
         return
@@ -144,7 +141,7 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string): Futur
         await client.send(OK)
     except:
         incrementCounter("CLIENT_SEND_OK_ERR")
-        echo "Error 'client.send(OK)' cid=", cid
+        log(lvlError, fmt"[mitmHttps] client.send(OK) cid:{cid}.")
         return
 
     let ctx = getMITMContext(host)
@@ -157,6 +154,7 @@ proc mitmHttps(client: AsyncSocket, host: string, port: int, cid: string): Futur
         result = await tunnel(client, remote, cid)
     except:
         incrementCounter("TUNNEL_ERR")
+        log(lvlError, fmt"[mitmHttps] Error tunnel cid:{cid} Exception: {getCurrentExceptionMsg()}.")        
         echo "Error tunnel cid=", cid
 
 
@@ -241,7 +239,8 @@ proc startMITMProxy*(cfg: Configuration, address: string, port: int) {.async.} =
 
     try:
         server.listen()
-        echo "[SERVER STARTED OK]"
+        log(lvlInfo, fmt"[SERVER STARTED OK]")
+
         var client = newAsyncSocket(buffered=false)
         while true:
             client = await server.accept()
@@ -253,5 +252,4 @@ proc startMITMProxy*(cfg: Configuration, address: string, port: int) {.async.} =
             if CONFIG.list_statistics:
                 discard listCounters()
     except:
-       echo "[start] " & getCurrentExceptionMsg()
-       echo getStackTrace()
+       log(lvlError, fmt"[start] {getCurrentExceptionMsg()} stackTrace: {getStackTrace()}")

@@ -1,4 +1,4 @@
-import std/[osproc, os]
+import std/[osproc]
 
 proc execCmdWrap*(cmd: string): bool =
     ## Wrapper proc to catch errors when executing OS commands.

@@ -1,6 +1,5 @@
-import std/[os, strutils, asyncdispatch]
+import std/[logging, os, strformat, asyncdispatch]
 import libs/[mitm, certman ]
-import re
 import libs/config
 
 # inspiration taken from: https://xmonader.github.io/nimdays/day15_tcprouter.html
@@ -23,22 +22,19 @@ import libs/config
 # TODO: Fix websockets, they seem to break. Read on SWITCH PROTOCOL and how it's done.
 # TODO: Tests for various proxy related attacks/dos on my implementation, it will probably be bad
 
-# proc setupLogging*() = 
-#     var stdout = newConsoleLogger(
-#         fmtStr = "[$time][$levelname][NemesisMITM]::",
-#         levelThreshold = lvlWarn)
-#         # levelThreshold = lvlInfo
-
-#     var fileLog = newFileLogger("errors.log", levelThreshold=lvlError)
-#     addHandler(stdout)
-#     addHandler(fileLog)
+proc setupLogging*() =
+    var stdout = newConsoleLogger(
+        fmtStr = "[$datetime][$levelid][mitm-proxy]::",
+        levelThreshold = lvlInfo) # lvlWarn
+    addHandler(stdout)
 
 
 proc run() =
     let config = getConfig()
 
-    #setupLogging()
-    #log(lvlInfo, fmt"[*] STARTING on {host}:{$port} --")
+    setupLogging()
+    log(lvlInfo, fmt"[*] STARTING on {config.host}:{$config.port} --")
+
     if not dirExists("certs"):
         echo ("[?] Root CA not found, generating :: certs/ca.pem")
         echo ("[?] Do not forget to import/use this CA !")
@@ -48,7 +44,7 @@ proc run() =
     try:
         waitFor startMITMProxy(config, config.host, config.port)
     except:
-        echo ("[start][ERROR]" & getCurrentExceptionMsg())
+        log(lvlError, fmt"[start] on {config.host}:{$config.port} Exception: {getCurrentExceptionMsg()}")
 
 when isMainModule:
     run()
